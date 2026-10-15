@@ -1,0 +1,426 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0b0d10">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Live Text Scanner</title>
+<style>
+  :root {
+    --bg: #0b0d10;
+    --panel: #15181d;
+    --panel-2: #1d2128;
+    --text: #f2f4f7;
+    --muted: #9aa3ae;
+    --accent: #3b82f6;
+    --accent-ink: #ffffff;
+    --live: #22c55e;
+    --danger: #ef4444;
+    --border: #2a2f37;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; overflow: hidden; }
+  button { font: inherit; color: inherit; border: 0; cursor: pointer; }
+
+  #stage { position: fixed; inset: 0; background: #000; }
+  video { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+  /* Guide box: only the text inside it is read */
+  #guide { position: absolute; left: 5%; right: 5%; top: 14%; height: 46%;
+    border: 2px solid rgba(255,255,255,.85); border-radius: 14px;
+    box-shadow: 0 0 0 100vmax rgba(0,0,0,.35); pointer-events: none; transition: border-color .2s; }
+  #guide.live { border-color: var(--live); }
+  #guide.live::after { content: ""; position: absolute; left: 6px; right: 6px; height: 2px; top: 0;
+    background: var(--live); opacity: .8; animation: sweep 1.6s ease-in-out infinite alternate; }
+  @keyframes sweep { to { top: calc(100% - 2px); } }
+
+  #top { position: absolute; top: 0; left: 0; right: 0; padding: calc(env(safe-area-inset-top) + 10px) 16px 10px;
+    display: flex; align-items: center; gap: 10px; }
+  .pill { background: rgba(21,24,29,.82); backdrop-filter: blur(8px); border-radius: 999px; padding: 6px 12px;
+    font-size: 14px; color: var(--muted); }
+  #status { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #status b { color: var(--text); font-weight: 600; }
+  #torch { display: none; }
+
+  /* Live preview of the latest lines */
+  #feed { position: absolute; left: 16px; right: 16px; top: calc(14% + 46% + 12px);
+    bottom: calc(env(safe-area-inset-bottom) + 108px); overflow: hidden;
+    display: flex; flex-direction: column; justify-content: flex-end; gap: 4px; pointer-events: none; }
+  #feed div { background: rgba(21,24,29,.85); border-radius: 8px; padding: 4px 10px; font-size: 14px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; animation: pop .25s ease-out; }
+  @keyframes pop { from { opacity: 0; transform: translateY(6px); } }
+
+  #controls { position: absolute; left: 0; right: 0; bottom: 0;
+    padding: 14px 16px calc(env(safe-area-inset-bottom) + 18px);
+    display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 12px;
+    background: linear-gradient(transparent, rgba(0,0,0,.7)); }
+  .side { height: 48px; padding: 0 16px; border-radius: 999px; background: rgba(21,24,29,.85); font-size: 15px; font-weight: 600; }
+  #textBtn { justify-self: start; }
+  #doneBtn { justify-self: end; background: var(--accent); color: var(--accent-ink); }
+  #scanBtn { width: 78px; height: 78px; border-radius: 50%; background: #fff; color: #111;
+    font-weight: 700; font-size: 15px; box-shadow: 0 0 0 5px rgba(255,255,255,.3); transition: background .2s; }
+  #scanBtn.live { background: var(--live); color: #04210f; box-shadow: 0 0 0 5px rgba(34,197,94,.35); }
+  #scanBtn:disabled { opacity: .5; }
+
+  /* Text sheet */
+  #sheet { position: fixed; inset: 0; background: var(--bg); display: none; flex-direction: column; z-index: 5; }
+  #sheet.open { display: flex; }
+  #sheet header { padding: calc(env(safe-area-inset-top) + 12px) 16px 10px; display: flex; align-items: center; gap: 10px;
+    border-bottom: 1px solid var(--border); }
+  #sheet h1 { font-size: 18px; margin: 0; flex: 1; }
+  #sheet textarea { flex: 1; margin: 0; padding: 14px 16px; border: 0; resize: none; background: var(--panel);
+    color: var(--text); font: 16px/1.5 ui-monospace, Menlo, Consolas, monospace; outline: none; }
+  #sheet footer { padding: 12px 16px calc(env(safe-area-inset-bottom) + 14px); display: grid; gap: 10px;
+    border-top: 1px solid var(--border); }
+  #sheet label { font-size: 13px; color: var(--muted); }
+  #fname { width: 100%; height: 44px; border-radius: 10px; border: 1px solid var(--border); background: var(--panel-2);
+    color: var(--text); padding: 0 12px; font: inherit; }
+  .row { display: flex; gap: 10px; }
+  .row button { flex: 1; height: 48px; border-radius: 12px; background: var(--panel-2); font-weight: 600; }
+  .primary { background: var(--accent) !important; color: var(--accent-ink); }
+  .ghost { background: transparent; color: var(--muted); padding: 8px 4px; }
+  .danger { color: var(--danger) !important; }
+
+  #msg { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; padding: 24px;
+    text-align: center; background: var(--bg); z-index: 4; }
+  #msg.show { display: flex; }
+  #msg div { max-width: 420px; }
+  #msg button { margin-top: 18px; height: 48px; padding: 0 22px; border-radius: 12px; background: var(--accent); color: #fff; font-weight: 600; }
+
+  #toast { position: fixed; left: 50%; bottom: calc(env(safe-area-inset-bottom) + 120px); transform: translateX(-50%);
+    background: var(--panel-2); padding: 10px 16px; border-radius: 10px; font-size: 14px; opacity: 0; transition: opacity .2s;
+    pointer-events: none; z-index: 10; max-width: calc(100% - 32px); }
+  #toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <video id="video" playsinline muted autoplay></video>
+  <div id="guide"></div>
+  <div id="top">
+    <div id="status" class="pill">Starting camera…</div>
+    <button id="torch" class="pill" aria-label="Toggle flash">Flash</button>
+  </div>
+  <div id="feed" aria-live="polite"></div>
+  <div id="controls">
+    <button id="textBtn" class="side">Text (0)</button>
+    <button id="scanBtn" disabled>Scan</button>
+    <button id="doneBtn" class="side">Done</button>
+  </div>
+</div>
+
+<section id="sheet" aria-label="Captured text">
+  <header>
+    <h1>Captured text</h1>
+    <button id="closeSheet" class="ghost">Back to camera</button>
+  </header>
+  <textarea id="editor" spellcheck="true" placeholder="Nothing captured yet. Point the camera at a note and press Scan."></textarea>
+  <footer>
+    <label for="fname">File name</label>
+    <input id="fname" autocomplete="off">
+    <div class="row">
+      <button id="clearBtn" class="danger">Clear</button>
+      <button id="copyBtn">Copy</button>
+      <button id="saveBtn" class="primary">Save .docx</button>
+    </div>
+  </footer>
+</section>
+
+<div id="msg"><div><p id="msgText"></p><button id="retryBtn">Try again</button></div></div>
+<div id="toast"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script>
+(() => {
+  // ---- Settings ----
+  const MIN_LINE_CONF = 55;      // Tesseract confidence (0-100) a line needs to count
+  const SAME_LINE_RATIO = 0.8;   // similarity at which two lines are treated as the same text
+  const CONFIRM_FRAMES = 2;      // a line must be read in this many frames before it is kept
+  const CANDIDATE_TTL = 6;       // frames an unconfirmed line is remembered
+  const MAX_OCR_WIDTH = 1600;    // frames are scaled down to this width before OCR
+  const STORE_KEY = 'live-text-scanner:lines';
+
+  const $ = id => document.getElementById(id);
+  const video = $('video'), guide = $('guide'), statusEl = $('status'), feed = $('feed');
+  const scanBtn = $('scanBtn'), doneBtn = $('doneBtn'), textBtn = $('textBtn'), torchBtn = $('torch');
+  const sheet = $('sheet'), editor = $('editor'), fname = $('fname');
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+
+  let lines = load();            // accepted text, in reading order
+  let candidates = [];           // {text, norm, conf, hits, age}
+  let worker = null, stream = null, track = null, wakeLock = null;
+  let scanning = false, frameNo = 0, torchOn = false;
+
+  // ---- Storage (kept so a reload doesn't lose a session) ----
+  function load() { try { return JSON.parse(localStorage.getItem(STORE_KEY)) || []; } catch { return []; } }
+  function save() { try { localStorage.setItem(STORE_KEY, JSON.stringify(lines)); } catch {} }
+
+  // ---- Text matching ----
+  const norm = s => s.toLowerCase().replace(/[^a-z0-9]+/g, '');
+  function similarity(a, b) {
+    if (a === b) return 1;
+    if (!a.length || !b.length) return 0;
+    let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+    for (let i = 1; i <= a.length; i++) {
+      const cur = [i];
+      for (let j = 1; j <= b.length; j++)
+        cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      prev = cur;
+    }
+    return 1 - prev[b.length] / Math.max(a.length, b.length);
+  }
+  // Index of an accepted line this text duplicates, or -1
+  function findKnown(n) {
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const k = norm(lines[i]);
+      if (similarity(k, n) >= SAME_LINE_RATIO) return i;
+      // a partial read of a line we already have (or vice versa)
+      if (n.length >= 8 && (k.includes(n) || n.includes(k) && k.length >= 8)) return i;
+    }
+    return -1;
+  }
+  function looksLikeText(t) {
+    const letters = (t.match(/[A-Za-z0-9]/g) || []).length;
+    return letters >= 3 && letters / t.replace(/\s/g, '').length >= 0.6;
+  }
+
+  function ingest(ocrLines) {
+    const added = [];
+    for (const l of ocrLines) {
+      const text = l.text.replace(/\s+/g, ' ').trim();
+      if (l.confidence < MIN_LINE_CONF || !looksLikeText(text)) continue;
+      const n = norm(text);
+      const known = findKnown(n);
+      if (known >= 0) {
+        // a fuller read of a line we already kept replaces it
+        if (n.length > norm(lines[known]).length + 3 && norm(text).includes(norm(lines[known]))) lines[known] = text;
+        continue;
+      }
+      let c = candidates.find(c => c.age !== frameNo && similarity(c.norm, n) >= SAME_LINE_RATIO);
+      if (!c) {
+        if (!candidates.some(c => c.age === frameNo && c.norm === n))
+          candidates.push({ text, norm: n, conf: l.confidence, hits: 1, age: frameNo });
+        continue;
+      }
+      c.hits++; c.age = frameNo;
+      if (l.confidence > c.conf) { c.text = text; c.norm = n; c.conf = l.confidence; }
+      if (c.hits >= CONFIRM_FRAMES) {
+        lines.push(c.text); added.push(c.text);
+        candidates = candidates.filter(x => x !== c);
+      }
+    }
+    candidates = candidates.filter(c => frameNo - c.age < CANDIDATE_TTL);
+    if (added.length) { save(); showFeed(added); if (navigator.vibrate) navigator.vibrate(15); }
+    updateCounts();
+  }
+
+  // ---- UI helpers ----
+  function updateCounts() {
+    textBtn.textContent = `Text (${lines.length})`;
+  }
+  function setStatus(html) { statusEl.innerHTML = html; }
+  function showFeed(added) {
+    for (const t of added) {
+      const d = document.createElement('div');
+      d.textContent = t;
+      feed.appendChild(d);
+    }
+    while (feed.children.length > 6) feed.firstChild.remove();
+  }
+  let toastTimer;
+  function toast(t) {
+    const el = $('toast'); el.textContent = t; el.classList.add('show');
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.remove('show'), 2200);
+  }
+  function fail(text) { $('msgText').textContent = text; $('msg').classList.add('show'); }
+
+  // ---- Camera ----
+  async function startCamera() {
+    $('msg').classList.remove('show');
+    if (!window.isSecureContext) {
+      return fail('Phones only allow the camera on https:// pages. This page was opened as a file, so open it from its https link instead.');
+    }
+    if (!navigator.mediaDevices?.getUserMedia) {
+      return fail('This browser can’t open the camera here. Open this page over https:// in Chrome (Android) or Safari (iPhone).');
+    }
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } }
+      });
+    } catch (e) {
+      return fail(e.name === 'NotAllowedError'
+        ? 'Camera access was blocked. Allow the camera for this page in your browser settings, then try again.'
+        : 'Couldn’t start the camera (' + e.name + ').');
+    }
+    video.srcObject = stream;
+    await video.play().catch(() => {});
+    track = stream.getVideoTracks()[0];
+    try {
+      const caps = track.getCapabilities?.() || {};
+      if (caps.torch) torchBtn.style.display = 'block';
+      if (caps.focusMode?.includes('continuous'))
+        await track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] });
+    } catch {}
+    initOCR();
+  }
+
+  async function initOCR() {
+    if (worker) return ready();
+    setStatus('Loading text reader…');
+    try {
+      worker = await Tesseract.createWorker('eng', 1, {
+        langPath: 'https://cdn.jsdelivr.net/npm/@tesseract.js-data/eng@1.0.0/4.0.0_best_int',
+        workerPath: 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/worker.min.js',
+        corePath: 'https://cdn.jsdelivr.net/npm/tesseract.js-core@5.1.1',
+      });
+      await worker.setParameters({ tessedit_pageseg_mode: '6', preserve_interword_spaces: '1' });
+    } catch (e) {
+      console.error(e);
+      return fail('Couldn’t load the text reader. Check your internet connection and try again.');
+    }
+    ready();
+  }
+  function ready() {
+    scanBtn.disabled = false;
+    setStatus(lines.length ? `<b>${lines.length}</b> lines saved · press Scan to add more` : 'Fit the note in the box, then press Scan');
+  }
+
+  // Crop the area under the guide box out of the video frame
+  function grabFrame() {
+    const vw = video.videoWidth, vh = video.videoHeight;
+    if (!vw || !vh) return false;
+    const vr = video.getBoundingClientRect(), gr = guide.getBoundingClientRect();
+    const scale = Math.max(vr.width / vw, vr.height / vh);       // object-fit: cover
+    const offX = (vr.width - vw * scale) / 2, offY = (vr.height - vh * scale) / 2;
+    let sx = (gr.left - vr.left - offX) / scale, sy = (gr.top - vr.top - offY) / scale;
+    let sw = gr.width / scale, sh = gr.height / scale;
+    sx = Math.max(0, sx); sy = Math.max(0, sy);
+    sw = Math.min(vw - sx, sw); sh = Math.min(vh - sy, sh);
+    const out = Math.min(1, MAX_OCR_WIDTH / sw);
+    canvas.width = Math.round(sw * out); canvas.height = Math.round(sh * out);
+    ctx.filter = 'grayscale(1) contrast(1.25)';
+    ctx.drawImage(video, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+    ctx.filter = 'none';
+    return true;
+  }
+
+  async function loop() {
+    while (scanning) {
+      if (!grabFrame()) { await new Promise(r => setTimeout(r, 150)); continue; }
+      frameNo++;
+      try {
+        const { data } = await worker.recognize(canvas);
+        if (!scanning) break;
+        ingest(data.lines || []);
+        setStatus(`<b>Scanning</b> · ${lines.length} lines · move slowly across the note`);
+      } catch (e) { console.error(e); }
+    }
+  }
+
+  async function startScan() {
+    scanning = true; candidates = [];
+    scanBtn.textContent = 'Pause'; scanBtn.classList.add('live'); guide.classList.add('live');
+    setStatus('<b>Scanning</b> · hold steady');
+    try { wakeLock = await navigator.wakeLock?.request('screen'); } catch {}
+    loop();
+  }
+  function stopScan() {
+    scanning = false;
+    scanBtn.textContent = 'Scan'; scanBtn.classList.remove('live'); guide.classList.remove('live');
+    try { wakeLock?.release(); } catch {} wakeLock = null;
+    if (worker) ready();
+  }
+
+  // ---- .docx export ----
+  const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  async function buildDocx(text) {
+    const paras = text.split(/\r?\n/).map(t =>
+      t ? `<w:p><w:r><w:t xml:space="preserve">${esc(t)}</w:t></w:r></w:p>` : '<w:p/>').join('');
+    const zip = new JSZip();
+    zip.file('[Content_Types].xml',
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+      '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+      '<Default Extension="xml" ContentType="application/xml"/>' +
+      '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>' +
+      '</Types>');
+    zip.file('_rels/.rels',
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+      '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>' +
+      '</Relationships>');
+    zip.file('word/document.xml',
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>' + paras +
+      '<w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/></w:sectPr>' +
+      '</w:body></w:document>');
+    return zip.generateAsync({ type: 'blob', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+  }
+  function defaultName() {
+    const d = new Date(), p = n => String(n).padStart(2, '0');
+    return `Scan ${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}${p(d.getMinutes())}`;
+  }
+  async function saveDocx() {
+    const text = editor.value.trim();
+    if (!text) return toast('Nothing to save yet');
+    const name = (fname.value.trim() || defaultName()).replace(/\.docx$/i, '').replace(/[\\/:*?"<>|]/g, '-') + '.docx';
+    const blob = await buildDocx(text);
+    const file = new File([blob], name, { type: blob.type });
+    // Phones: offer the share sheet (Save to Files, Drive, WhatsApp…) when available
+    if (navigator.canShare?.({ files: [file] })) {
+      try { await navigator.share({ files: [file], title: name }); return toast('Saved'); }
+      catch (e) { if (e.name === 'AbortError') return; }
+    }
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    toast('Downloaded ' + name);
+  }
+
+  // ---- Sheet ----
+  function openSheet() {
+    stopScan();
+    editor.value = lines.join('\n');
+    if (!fname.value) fname.value = defaultName();
+    sheet.classList.add('open');
+  }
+  function closeSheet() {
+    lines = editor.value.split('\n').map(s => s.trim()).filter(Boolean);
+    save(); updateCounts(); sheet.classList.remove('open'); ready();
+  }
+
+  // ---- Wire up ----
+  scanBtn.onclick = () => scanning ? stopScan() : startScan();
+  textBtn.onclick = openSheet;
+  doneBtn.onclick = openSheet;
+  $('closeSheet').onclick = closeSheet;
+  $('saveBtn').onclick = saveDocx;
+  editor.oninput = () => { lines = editor.value.split('\n').map(s => s.trim()).filter(Boolean); save(); updateCounts(); };
+  $('copyBtn').onclick = async () => {
+    try { await navigator.clipboard.writeText(editor.value); toast('Copied'); } catch { editor.select(); toast('Select all and copy'); }
+  };
+  $('clearBtn').onclick = () => {
+    if (!confirm('Clear all captured text?')) return;
+    lines = []; candidates = []; editor.value = ''; feed.innerHTML = ''; save(); updateCounts();
+  };
+  torchBtn.onclick = async () => {
+    torchOn = !torchOn;
+    try { await track.applyConstraints({ advanced: [{ torch: torchOn }] }); } catch { torchOn = false; }
+    torchBtn.style.color = torchOn ? '#facc15' : '';
+  };
+  $('retryBtn').onclick = startCamera;
+  document.addEventListener('visibilitychange', () => { if (document.hidden && scanning) stopScan(); });
+
+  window.__scanner = { ingest, get lines() { return lines; }, buildDocx }; // for testing
+  updateCounts();
+  startCamera();
+})();
+</script>
+</body>
+</html>
